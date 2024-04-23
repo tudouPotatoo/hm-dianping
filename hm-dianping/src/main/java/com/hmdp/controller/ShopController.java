@@ -8,8 +8,8 @@ import com.hmdp.entity.Shop;
 import com.hmdp.service.IShopService;
 import com.hmdp.utils.SystemConstants;
 import org.springframework.web.bind.annotation.*;
-
 import javax.annotation.Resource;
+import javax.servlet.http.HttpServletResponse;
 
 /**
  * <p>
@@ -32,8 +32,13 @@ public class ShopController {
      * @return 商铺详情数据
      */
     @GetMapping("/{id}")
-    public Result queryShopById(@PathVariable("id") Long id) {
-        return Result.ok(shopService.getById(id));
+    public Result queryShopById(@PathVariable("id") Long id, HttpServletResponse response) {
+        Shop shop = shopService.queryById(id);
+        if (shop == null) {
+            response.setStatus(404);
+            return Result.fail("你所查找的商户不存在！");
+        }
+        return Result.ok(shop);
     }
 
     /**
