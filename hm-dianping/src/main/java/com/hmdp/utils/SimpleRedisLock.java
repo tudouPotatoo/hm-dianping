@@ -37,7 +37,7 @@ public class SimpleRedisLock implements ILock {
 
     /**
      * 尝试获取锁
-     *      键名范例：lock:seckillVoucher:123(userId)
+     *      键名范例：lock:seckillVoucher(业务名称):123(userId)
      *      val存储当前线程id
      * @param key 键名
      * @param timeoutSec 锁持有的超时时间，过期后自动释放
@@ -83,3 +83,5 @@ public class SimpleRedisLock implements ILock {
     //     }
     // }
 }
+
+
