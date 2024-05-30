@@ -61,7 +61,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      */
     private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
 
-    // 加载unlock方法对应的lua脚本
+    // 加载seckillVoucher方法对应的lua脚本
     static {
         SECKILL_SCRIPT = new DefaultRedisScript<>();
         SECKILL_SCRIPT.setLocation(new ClassPathResource("seckillVoucher.lua"));
@@ -96,7 +96,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 try {
                     // 1. 从消息队列获取订单
                     // XREADGROUP GROUP g1 c1 COUNT 1 BLOCK 2000 STREAMS stream.orders >
-                    List<MapRecord<String, Object, Object>> list = redisTemplate.opsForStream().read(Consumer.from("g1", "c1"),  // g1为消费组组名 c1为消费组中的消费者
+                    // g1为消费组组名 c1为消费组中的消费者
+                    List<MapRecord<String, Object, Object>> list = redisTemplate.opsForStream().read(Consumer.from("g1", "c1"),
                             StreamReadOptions.empty().count(1).block(Duration.ofSeconds(2)),
                             StreamOffset.create(STREAM, ReadOffset.lastConsumed()));
                     // 1.1 获取失败 重试
@@ -115,7 +116,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     redisTemplate.opsForStream().acknowledge(STREAM, "g1", msgId);
                 } catch (Exception e) {
                     // 1. 记录异常
-                    log.error("下单出现异常：", e.getMessage());
+                    log.error("下单出现异常：" + e.getMessage());
                     // 2. 从pending-List获取消息重新处理
                     handlerPendingList();
                 }
@@ -127,7 +128,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                 try {
                     // 1. 从pending-list队列获取订单
                     // XREADGROUP GROUP g1 c1 COUNT 1 BLOCK 2000 STREAMS stream.orders 0
-                    List<MapRecord<String, Object, Object>> list = redisTemplate.opsForStream().read(Consumer.from("g1", "c1"),  // g1为消费组组名 c1为消费组中的消费者
+                    // g1为消费组组名 c1为消费组中的消费者
+                    List<MapRecord<String, Object, Object>> list = redisTemplate.opsForStream().read(Consumer.from("g1", "c1"),
                             StreamReadOptions.empty().count(1).block(Duration.ofSeconds(2)),
                             StreamOffset.create(STREAM, ReadOffset.from("0")));
                     // 1.1 获取失败 结束循环
@@ -141,12 +143,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     Map<Object, Object> recordValue = record.getValue();  // 消息的内容
                     VoucherOrder voucherOrder = BeanUtil.fillBeanWithMap(recordValue, new VoucherOrder(), false);
                     // 3. 执行下单业务
-                    createVoucherOrder(voucherOrder);
+                    handlerVoucherOrder(voucherOrder);
                     // 4. XACK进行消息确认
                     redisTemplate.opsForStream().acknowledge(STREAM, "g1", msgId);
                 } catch (Exception e) {
                     // 1. 记录异常
-                    log.error("下单出现异常：", e.getMessage());
+                    log.error("下单出现异常：" + e.getMessage());
                 }
             }
         }
@@ -214,8 +216,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
      * 1. 检查当前用户是否购买过该优惠券 （保证一人一单）
      *      1.1 是 结束
      *      1.2 不是 继续往下
-     * 2. 扣减库存
-     * 3. 插入订单信息
+     * 2. 在数据库扣减库存
+     * 3. 插入订单信息到数据库
      * @param voucherOrder
      */
     @Transactional  // 由于涉及多张表的修改，因此使用事务
@@ -228,7 +230,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             log.error("该用户已经购买过一次！");
             return;
         }
-        // 6. 扣减库存
+        // 2. 在数据库扣减库存
         boolean updateResult = seckillVoucherService.update().setSql("stock = stock - 1").  // set stock = stock - 1
                 eq("voucher_id", voucherOrder.getVoucherId()).gt("stock", 0).  // where voucher_id = ? and stock > 0
                 update();
@@ -237,7 +239,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             log.error("库存不足！");
             return;
         }
-        // 7.4 存入数据库
+        // 3. 插入订单信息到数据库
         voucherOrderService.save(voucherOrder);
     }
 
