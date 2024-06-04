@@ -4,20 +4,26 @@ import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.bean.copier.CopyOptions;
 import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.RandomUtil;
+import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.CacheClient;
+import com.hmdp.utils.SystemConstants;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.geo.*;
+import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.domain.geo.GeoReference;
+import org.springframework.data.redis.domain.geo.Metrics;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -346,6 +352,80 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         redisTemplate.delete(key);
         // 4. 返回结果
         return Result.ok();
+    }
+
+    /**
+     * 根据类型查询店铺
+     * 1. 判断是否要根据店铺距离远近查询
+     *      1.1 否 普通查询，返回结果
+     *      1.2 是 继续往下
+     * 2. 根据typeId拼接该类型店铺的geo信息的key
+     * 3. 根据current当前页码得到起始下标、末尾下标
+     * 4. 使用命令：GEOSEARCH key FROMLONLAT longitude latitude BYRADIUS radius M COUNT count WITHDIST查询店铺id及距离信息
+     * 5. 截取[from, end]部分的店铺信息
+     * 6. 填充id列表 填充shopId与[x, y]之间距离的Map关系
+     * 7. 根据id列表批量查询店铺信息（注意id的顺序要和GEOSEARCH得到的结果顺序一致）
+     * 8. 根据补充店铺的distance信息
+     * 9. 返回店铺信息
+     * @param typeId 店铺类型id
+     * @param current 当前第几页
+     * @param x 经度
+     * @param y 纬度
+     * @return
+     */
+    @Override
+    public Result queryShopByType(Integer typeId, Integer current, Double x, Double y) {
+        //  1. 判断是否要根据店铺距离远近查询
+        if (x == null || y == null) {
+            //  1.1 否 普通查询，返回结果
+            // 根据类型分页查询
+            Page<Shop> page = query()
+                    .eq("type_id", typeId)
+                    .page(new Page<>(current, SystemConstants.DEFAULT_PAGE_SIZE));
+            // 返回数据
+            return Result.ok(page.getRecords());
+        }
+        // 1.2 是 继续往下
+        // 2. 根据typeId拼接该类型店铺的geo信息的key
+        String key = SHOP_GEO_KEY + typeId;
+        // 3. 根据current当前页码得到起始下标、末尾下标
+        int from = (current - 1) * SystemConstants.DEFAULT_PAGE_SIZE;
+        int end = current * SystemConstants.DEFAULT_PAGE_SIZE;
+        // 4. 使用命令：GEOSEARCH key FROMLONLAT longitude latitude BYRADIUS radius M COUNT count WITHDIST查询店铺id及距离信息
+        GeoResults<RedisGeoCommands.GeoLocation<String>> locationGeoResults = redisTemplate.opsForGeo().search(
+                key,
+                GeoReference.fromCoordinate(new Point(x, y)),
+                new Distance(5000, Metrics.METERS),  // 搜索5000m内的商铺
+                RedisGeoCommands
+                        .GeoSearchCommandArgs
+                        .newGeoSearchArgs()
+                        .limit(end)
+                        .includeDistance());
+        List<GeoResult<RedisGeoCommands.GeoLocation<String>>> list= locationGeoResults.getContent();
+
+        List<Long> shopIds = new ArrayList<>(list.size());
+        Map<String, Distance> distanceMap = new HashMap<>(list.size());
+        // 5. 截取[from, end]部分的店铺信息
+        list.stream().skip(from).forEach(result -> {
+            // 获取shopId
+            String idStr = result.getContent().getName();
+            // 6. 填充id列表
+            shopIds.add(Long.valueOf(idStr));
+            // 6. 填充shopId与[x, y]之间距离的Map关系
+            distanceMap.put(idStr, result.getDistance());
+        });
+        // 如果已经读取完全部商铺，则返回空集
+        if (shopIds == null || shopIds.size() == 0) {
+            return Result.ok(Collections.emptyList());
+        }
+        // 7. 根据id列表批量查询店铺信息（注意id的顺序要和GEOSEARCH得到的结果顺序一致）
+        String idStrs = StrUtil.join(", ", shopIds);
+        List<Shop> shops = query().in("id", shopIds).last("ORDER BY FIELD(id, " + idStrs + ")").list();
+        // 8. 根据补充店铺的distance信息
+        for (Shop shop : shops) {
+            shop.setDistance(distanceMap.get(shop.getId().toString()).getValue());
+        }
+        return Result.ok(shops);
     }
 
     /**

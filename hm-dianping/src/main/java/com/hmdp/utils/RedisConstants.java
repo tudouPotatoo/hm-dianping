@@ -23,6 +23,10 @@ public class RedisConstants {
      * 用户的关注列表
      */
     public static final String USER_FOLLOWEE = "followee:";
+    /**
+     * 用户收件箱
+     */
+    public static final String INBOX_KEY = "inbox:";
     public static final String FEED_KEY = "feed:";
     public static final String SHOP_GEO_KEY = "shop:geo:";
     public static final String USER_SIGN_KEY = "sign:";

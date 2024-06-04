@@ -15,14 +15,6 @@ import org.springframework.web.bind.annotation.*;
 import javax.annotation.Resource;
 import java.util.List;
 
-/**
- * <p>
- * 前端控制器
- * </p>
- *
- * @author 虎哥
- * @since 2021-12-22
- */
 @RestController
 @RequestMapping("/blog")
 public class BlogController {
@@ -30,15 +22,14 @@ public class BlogController {
     @Resource
     private IBlogService blogService;
 
+    /**
+     * 发布帖子
+     * @param blog
+     * @return
+     */
     @PostMapping
     public Result saveBlog(@RequestBody Blog blog) {
-        // 获取登录用户
-        UserDTO user = UserHolder.getUser();
-        blog.setUserId(user.getId());
-        // 保存探店博文
-        blogService.save(blog);
-        // 返回id
-        return Result.ok(blog.getId());
+        return blogService.saveBlog(blog);
     }
 
     @PutMapping("/like/{id}")
@@ -104,5 +95,20 @@ public class BlogController {
         // 获取当前页数据
         List<Blog> records = page.getRecords();
         return Result.ok(records);
+    }
+
+    // 滚动分页，每页查询两条数据：ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]
+    // 第一页：ZREVRANGEBYSCORE key current-timestamp 0 [WITHSCORES] [LIMIT 0 2]
+    // 其它页：ZREVRANGEBYSCORE key max 0 [WITHSCORES] [LIMIT offset 2]
+    /**
+     * 滚动分页查询关注的人发布的帖子（类似于朋友圈功能）
+     * 第一次访问该方法时，前端传入的lastId值为当前时间戳，offset不会传入，因此需要给offset设置默认值0。
+     * @param max score/timestamp的最大值
+     * @param offset 偏移量
+     * @return
+     */
+    @GetMapping("/of/follow")
+    public Result queryFolloweeBlogByPage(@RequestParam("lastId") Long max, @RequestParam(value = "offset", defaultValue = "0") Integer offset) {
+        return blogService.queryFolloweeBlogByPage(max, offset);
     }
 }
