@@ -12,26 +12,23 @@ import com.hmdp.entity.User;
 import com.hmdp.mapper.UserMapper;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.RegexUtils;
+import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.stereotype.Service;
 import javax.servlet.http.HttpSession;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import static com.hmdp.utils.RedisConstants.*;
 
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author 虎哥
- * @since 2021-12-22
- */
 @Slf4j
 @Service
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
@@ -177,5 +174,88 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
 
         // 5. 将token返回给客户端
         return Result.ok(token);
+    }
+
+    /**
+     * 用户签到
+     * 1. 获取用户信息
+     * 2. 获取当天日期
+     * 3. 拼接用户签到表key
+     * 4. 获取当天是该月的第几天
+     * 5. 签到
+     * 6. 返回结果
+     * @return
+     */
+    @Override
+    public Result sign() {
+        // 1. 获取用户信息
+        UserDTO user = UserHolder.getUser();
+        Long userId = user.getId();
+        // 2. 获取当天日期
+        LocalDateTime now = LocalDateTime.now();
+        String date = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+        // 3. 拼接用户签到表key
+        String key = USER_SIGN_KEY + userId + date;
+        // 4. 获取当天是该月的第几天
+        int dayOfMonth = now.getDayOfMonth();
+        // 5. 签到【天数是从1开始，BitMap下标是从0开始，因此offset值为天数-1】
+        redisTemplate.opsForValue().setBit(key, dayOfMonth - 1, true);
+        // 6. 返回结果
+        return Result.ok();
+    }
+
+    /**
+     * 计算用户从当前时间往前，在本月的连续签到天数
+     * 1. 获取用户信息
+     * 2. 获取当天日期
+     * 3. 拼接用户本月签到表key
+     * 4. 获取当天是该月的第几天
+     * 5. 获取从1号到今天的所有签到数据
+     * 6. 遍历统计连续签到天数
+     *    6.1 和1相与 得到对应这一天的签到情况
+     *    6.2 已签到 连续签到天数+1，右移1位
+     *    6.3 未签到 结束循环
+     * 7. 返回连续签到天数
+     * @return
+     */
+    @Override
+    public Result signCount() {
+        // 1. 获取用户信息
+        UserDTO user = UserHolder.getUser();
+        Long userId = user.getId();
+        // 2. 获取当天日期
+        LocalDateTime now = LocalDateTime.now();
+        String date = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+        // 3. 拼接用户签到表key
+        String key = USER_SIGN_KEY + userId + date;
+        // 4. 获取当天是该月的第几天
+        int dayOfMonth = now.getDayOfMonth();
+        // 5. 获取从1号到今天的所有签到数据
+        // BITFIELD key GET u[dayOfMonth] 0
+        List<Long> list = redisTemplate.opsForValue()
+                .bitField(key,
+                        BitFieldSubCommands.create().get(
+                                        BitFieldSubCommands.BitFieldType.unsigned(dayOfMonth))
+                                .valueAt(0));
+        // 没有签到数据 直接返回0
+        if (list == null || list.isEmpty()) {
+            return Result.ok(0);
+        }
+        Long signVal = list.get(0);
+        // 6. 遍历统计连续签到天数
+        int count = 0;
+        while (true) {
+            // 6.1 和1相与 得到对应这一天的签到情况
+            if ((signVal & 1) == 1) {
+                // 6.2 已签到 连续签到天数+1，右移1位
+                count++;
+                signVal = signVal >>> 1;
+            } else {
+                // 6.3 未签到 结束循环
+                break;
+            }
+        }
+        // 7. 返回连续签到天数
+        return Result.ok(count);
     }
 }

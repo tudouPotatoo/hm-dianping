@@ -106,4 +106,13 @@ public class UserController {
     public Result sign() {
         return userService.sign();
     }
+
+    /**
+     * 计算用户从当前时间往前，在本月的连续签到天数
+     * @return
+     */
+    @GetMapping("/sign/count")
+    public Result signCount() {
+        return userService.signCount();
+    }
 }
